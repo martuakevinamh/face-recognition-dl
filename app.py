@@ -183,5 +183,5 @@ if image_input:
     with c2:
         st.warning("🧠 ViT (Fine-Tuned)")
         name, score = predict_vit(img_pil, thresh_vit)
-        st.success(f"**{name}**") if "Tidak Dikenal" not in name else st.error(name)
+        st.success(f"**{name}**") if name != "Tidak Dikenal" else st.error(name)
         st.progress(min(score, 1.0), f"{score:.2f}")
