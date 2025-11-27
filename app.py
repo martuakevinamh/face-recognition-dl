@@ -177,11 +177,17 @@ if image_input:
     with c1:
         st.info("🤖 InsightFace")
         name, score = predict_insightface(img_bgr, thresh_insight)
-        st.success(f"**{name}**") if name != "Tidak Dikenal" else st.error(name)
+        if name != "Tidak Dikenal":
+            st.success(f"**{name}**")
+        else:
+            st.error(name)
         st.progress(min(score, 1.0), f"{score:.2f}")
         
     with c2:
         st.warning("🧠 ViT (Fine-Tuned)")
         name, score = predict_vit(img_pil, thresh_vit)
-        st.success(f"**{name}**") if name != "Tidak Dikenal" else st.error(name)
+        if name != "Tidak Dikenal":
+            st.success(f"**{name}**")
+        else:
+            st.error(name)
         st.progress(min(score, 1.0), f"{score:.2f}")
