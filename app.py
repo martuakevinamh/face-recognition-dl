@@ -9,12 +9,12 @@ from PIL import Image
 # 1. KONFIGURASI HALAMAN
 # ==========================================
 st.set_page_config(
-    page_title="Sistem Presensi Wajah",
+    page_title="Face Recognition Cerdas",
     page_icon="🎓",
     layout="centered"
 )
 
-st.title("🎓 Presensi Mahasiswa Cerdas")
+st.title("🎓  Face Recognition Cerdas")
 st.markdown("### Kelompok: Martua, Rayhan, Fadil")
 st.markdown("---")
 
@@ -54,11 +54,16 @@ st.sidebar.info(f"Jumlah Mahasiswa Terdaftar: **{len(face_db)}**")
 # ==========================================
 # 4. FUNGSI DETEKSI & PENGENALAN
 # ==========================================
-def process_image(image_file):
+def process_image(image_file, mirror=False):
     # Baca gambar dari Streamlit (Bytes) -> OpenCV
     file_bytes = np.asarray(bytearray(image_file.read()), dtype=np.uint8)
     img_bgr = cv2.imdecode(file_bytes, 1)
     img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+    
+    # Mirror kamera jika diaktifkan
+    if mirror:
+        img_rgb = cv2.flip(img_rgb, 1)  # 1 = flip horizontal
+        img_bgr = cv2.flip(img_bgr, 1)
     
     # Deteksi Wajah
     faces = app.get(img_bgr)
@@ -112,10 +117,11 @@ tab1, tab2 = st.tabs(["📸 Ambil Foto (Live)", "📂 Upload File"])
 
 with tab1:
     st.write("Ambil foto selfie untuk presensi:")
+    mirror_cam = st.checkbox("🔄 Mirror Kamera", value=True)
     camera_img = st.camera_input("Kamera")
     
     if camera_img is not None:
-        processed_img, names = process_image(camera_img)
+        processed_img, names = process_image(camera_img, mirror=mirror_cam)
         st.image(processed_img, caption="Hasil Deteksi", use_container_width=True)
         
         if names:
@@ -127,7 +133,7 @@ with tab2:
     uploaded_file = st.file_uploader("Upload foto (JPG/PNG)", type=['jpg', 'png', 'jpeg'])
     
     if uploaded_file is not None:
-        processed_img, names = process_image(uploaded_file)
+        processed_img, names = process_image(uploaded_file, mirror=False)
         st.image(processed_img, caption="Hasil Analisis", use_container_width=True)
         
         if names:
