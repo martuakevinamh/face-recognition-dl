@@ -19,7 +19,7 @@ st.set_page_config(
     layout="wide"
 )
 
-HF_REPO_ID = "Martua/tugas-deep-learning-face" 
+HF_REPO_ID = "Martua/tubes-deep-learning-face" 
 
 st.title("🎓 Face Recognition Cerdas ")
 st.markdown("### Kelompok: Martua, Rayhan, Fadil")
