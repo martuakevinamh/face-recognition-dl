@@ -60,10 +60,12 @@ def process_image(image_file, mirror=False):
     img_bgr = cv2.imdecode(file_bytes, 1)
     img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
     
-    # Mirror kamera jika diaktifkan
+    # Mirror kamera SEBELUM deteksi (penting!)
     if mirror:
         img_rgb = cv2.flip(img_rgb, 1)  # 1 = flip horizontal
         img_bgr = cv2.flip(img_bgr, 1)
+    
+    print(f"🔍 Mirror aktif: {mirror}")  # Debug
     
     # Deteksi Wajah
     faces = app.get(img_bgr)
