@@ -1,194 +1,187 @@
 import streamlit as st
 import cv2
 import numpy as np
+import torch
+import torch.nn as nn
+from torchvision import models, transforms
+from PIL import Image
 import insightface
 from insightface.app import FaceAnalysis
-from PIL import Image
+from huggingface_hub import hf_hub_download
+import os
 
 # ==========================================
-# 1. KONFIGURASI HALAMAN
+# 1. KONFIGURASI HALAMAN & REPO
 # ==========================================
 st.set_page_config(
     page_title="Face Recognition Cerdas",
     page_icon="🎓",
-    layout="centered"
+    layout="wide"
 )
 
-st.title("🎓  Face Recognition Cerdas")
+HF_REPO_ID = "Martua/tugas-deep-learning-face" 
+
+st.title("🎓 Face Recognition Cerdas ")
 st.markdown("### Kelompok: Martua, Rayhan, Fadil")
 st.markdown("---")
 
 # ==========================================
-# 2. LOAD MODEL & DATABASE (Di-Cache biar cepat)
+# 2. FUNGSI DOWNLOAD DARI HUGGING FACE
 # ==========================================
 @st.cache_resource
-def load_insightface_model():
-    print("⏳ Memuat Model InsightFace...")
-    # ctx_id=0 untuk GPU, ctx_id=-1 untuk CPU (Biar aman di laptop biasa pake -1)
+def get_file_from_hf(filename):
+    try:
+        # Ini akan download file dan menyimpannya di cache lokal
+        path = hf_hub_download(repo_id=HF_REPO_ID, filename=filename)
+        return path
+    except Exception as e:
+        st.error(f"Gagal download {filename} dari Hugging Face: {e}")
+        return None
+
+# ==========================================
+# 3. LOAD MODEL INSIGHTFACE (ZERO-SHOT)
+# ==========================================
+@st.cache_resource
+def load_insightface():
+    print("⏳ Memuat InsightFace...")
     app = FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider'])
     app.prepare(ctx_id=-1, det_size=(640, 640))
     return app
 
 @st.cache_data
-def load_database(path):
-    print("📂 Memuat Database Wajah...")
-    try:
-        db = np.load(path, allow_pickle=True).item()
-        return db
-    except Exception as e:
-        st.error(f"Gagal memuat database! Pastikan file {path} ada.")
-        return {}
-
-# Load resource
-with st.spinner("Sedang menyiapkan sistem AI..."):
-    app = load_insightface_model()
-    face_db = load_database('insightface_db.npy')
+def load_insightface_db():
+    # Download DB dulu kalau belum ada
+    db_path = get_file_from_hf("insightface_db.npy")
+    if db_path:
+        return np.load(db_path, allow_pickle=True).item()
+    return {}
 
 # ==========================================
-# 3. SIDEBAR (PENGATURAN)
+# 4. LOAD MODEL ViT (FINE-TUNED)
 # ==========================================
-st.sidebar.header("⚙️ Pengaturan")
-threshold = st.sidebar.slider("Akurasi Min (Threshold)", 0.0, 1.0, 0.50, 0.05)
-mirror_camera = st.sidebar.toggle("🔄 Mirror Kamera", value=False)
-st.sidebar.info(f"Jumlah Mahasiswa Terdaftar: **{len(face_db)}**")
+@st.cache_resource
+def load_vit_model(num_classes):
+    print("⏳ Memuat ViT...")
+    device = torch.device("cpu")
+    
+    model = models.vit_b_16(weights=None)
+    model.heads.head = nn.Sequential(
+        nn.Dropout(0.2),
+        nn.Linear(model.heads.head.in_features, num_classes)
+    )
+    
+    # Download Model ViT dari HF
+    model_path = get_file_from_hf("model_vit_tuned_martua.pth")
+    
+    if model_path:
+        state_dict = torch.load(model_path, map_location=device)
+        model.load_state_dict(state_dict)
+        model.to(device)
+        model.eval()
+        return model
+    return None
+
+@st.cache_data
+def load_labels():
+    # Download Labels dari HF
+    label_path = get_file_from_hf("labels_pytorch.txt")
+    if label_path:
+        with open(label_path, 'r') as f:
+            return [line.strip() for line in f.readlines()]
+    return []
+
+# --- EKSEKUSI LOAD RESOURCE ---
+with st.spinner("Sedang mengunduh model dari Hugging Face..."):
+    app_insight = load_insightface()
+    db_insight = load_insightface_db()
+    
+    labels_vit = load_labels()
+    # Pastikan labels terload sebelum load model
+    if labels_vit:
+        model_vit = load_vit_model(len(labels_vit))
+    else:
+        model_vit = None
 
 # ==========================================
-# 4. FUNGSI DETEKSI & PENGENALAN
+# 5. FUNGSI PREDIKSI 
 # ==========================================
-def process_image(image_file, mirror=False):
-    # Baca gambar dari Streamlit (Bytes) -> OpenCV
-    file_bytes = np.asarray(bytearray(image_file.read()), dtype=np.uint8)
+def predict_insightface(img_bgr, threshold=0.5):
+    faces = app_insight.get(img_bgr)
+    if len(faces) == 0: return "Wajah Tidak Terdeteksi", 0.0
+    
+    face = sorted(faces, key=lambda x: (x.bbox[2]-x.bbox[0]) * (x.bbox[3]-x.bbox[1]), reverse=True)[0]
+    emb = face.normed_embedding
+    
+    max_score = 0
+    best_name = "Unknown"
+    for name, db_emb in db_insight.items():
+        score = np.dot(emb, db_emb)
+        if score > max_score:
+            max_score = score
+            best_name = name
+            
+    return (best_name, float(max_score)) if max_score > threshold else ("Tidak Dikenal", float(max_score))
+
+def predict_vit(img_pil, threshold=0.5):
+    if model_vit is None: return "Model Error", 0.0
+    transform = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])
+    ])
+    img_tensor = transform(img_pil).unsqueeze(0)
+    with torch.no_grad():
+        outputs = model_vit(img_tensor)
+        probs = torch.nn.functional.softmax(outputs, dim=1)
+        conf, idx = torch.max(probs, 1)
+    return (labels_vit[idx.item()], conf.item()) if conf.item() > threshold else ("Tidak Dikenal", conf.item())
+
+# ==========================================
+# 6. UI UTAMA
+# ==========================================
+col1, col2 = st.columns(2)
+with col1:
+    thresh_insight = st.slider("Threshold InsightFace", 0.0, 1.0, 0.5)
+with col2:
+    thresh_vit = st.slider("Threshold ViT", 0.0, 1.0, 0.5)
+
+col3, col4 = st.columns(2)
+with col3:
+    mirror_image = st.toggle("🔄 Mirror Gambar", value=False)
+with col4:
+    st.empty()  # Placeholder untuk balance layout
+
+input_mode = st.radio("Mode:", ["📸 Kamera", "📂 Upload File"], horizontal=True)
+image_input = st.camera_input("Foto") if input_mode == "📸 Kamera" else st.file_uploader("Upload", type=['jpg','png','jpeg'])
+
+if image_input:
+    file_bytes = np.asarray(bytearray(image_input.read()), dtype=np.uint8)
     img_bgr = cv2.imdecode(file_bytes, 1)
     img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
     
-    # Mirror kamera SEBELUM deteksi (penting!)
-    if mirror:
-        img_rgb = cv2.flip(img_rgb, 1)  # 1 = flip horizontal
+    # Apply mirror jika toggle aktif
+    if mirror_image:
         img_bgr = cv2.flip(img_bgr, 1)
+        img_rgb = cv2.flip(img_rgb, 1)
     
-    print(f"🔍 Mirror aktif: {mirror}")  # Debug
+    image_input.seek(0)
+    img_pil = Image.open(image_input).convert("RGB")
     
-    # Deteksi Wajah
-    faces = app.get(img_bgr)
+    # Apply mirror pada PIL image jika toggle aktif
+    if mirror_image:
+        img_pil = img_pil.transpose(Image.FLIP_LEFT_RIGHT)
     
-    # Siapkan Canvas untuk menggambar
-    img_draw = img_rgb.copy()
+    st.image(img_rgb, width=400)
     
-    results = []
-    
-    if len(faces) == 0:
-        st.warning("⚠️ Tidak ada wajah yang terdeteksi.")
-        return img_draw, results
-
-    # Loop setiap wajah yang ketemu
-    for face in faces:
-        bbox = face.bbox.astype(int)
-        emb = face.normed_embedding
+    c1, c2 = st.columns(2)
+    with c1:
+        st.info("🤖 InsightFace")
+        name, score = predict_insightface(img_bgr, thresh_insight)
+        st.success(f"**{name}**") if name != "Tidak Dikenal" else st.error(name)
+        st.progress(min(score, 1.0), f"{score:.2f}")
         
-        # --- PROSES PENCOCOKAN (RECOGNITION) ---
-        max_score = -1
-        best_name = "Unknown"
-        
-        for name, db_emb in face_db.items():
-            # Hitung kemiripan (Cosine Similarity)
-            score = np.dot(emb, db_emb)
-            if score > max_score:
-                max_score = score
-                best_name = name
-        
-        # Cek Threshold
-        final_name = "Tidak Dikenal"
-        color = (255, 0, 0) # Merah (Unknown)
-        
-        if max_score >= threshold:
-            final_name = best_name
-            color = (0, 255, 0) # Hijau (Dikenal)
-            results.append(final_name)
-        
-        # Gambar Kotak & Nama
-        cv2.rectangle(img_draw, (bbox[0], bbox[1]), (bbox[2], bbox[3]), color, 3)
-        cv2.putText(img_draw, f"{final_name} ({max_score:.2f})", 
-                    (bbox[0], bbox[1] - 10), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
-
-    return img_draw, results
-
-# ==========================================
-# 5. UI UTAMA (TABS)
-# ==========================================
-tab1, tab2 = st.tabs(["📸 Ambil Foto (Live)", "📂 Upload File"])
-
-with tab1:
-    st.write("Ambil foto selfie untuk presensi:")
-    
-    # Pilih input method
-    input_method = st.radio("Pilih Input:", ["Camera Streamlit", "Webcam Live (OpenCV)"], horizontal=True)
-    
-    if input_method == "Camera Streamlit":
-        camera_img = st.camera_input("Kamera")
-        
-        if camera_img is not None:
-            processed_img, names = process_image(camera_img, mirror=mirror_camera)
-            st.image(processed_img, caption="Hasil Deteksi", use_container_width=True)
-            
-            if names:
-                st.success(f"✅ Wajah terdaftar: **{', '.join(names)}**")
-            else:
-                st.error("❌ Wajah tidak terdaftar.")
-    
-    else:
-        # Webcam Live dengan OpenCV (bisa di-mirror)
-        st.write("**Live Webcam (Press 'c' to capture)**")
-        
-        cap = cv2.VideoCapture(0)
-        frame_placeholder = st.empty()
-        stop_button = st.button("Stop Webcam")
-        
-        captured_frame = None
-        
-        while cap.isOpened() and not stop_button:
-            ret, frame = cap.read()
-            
-            if not ret:
-                st.error("Tidak bisa akses webcam")
-                break
-            
-            # Mirror jika toggle aktif
-            if mirror_camera:
-                frame = cv2.flip(frame, 1)
-            
-            # Konversi BGR -> RGB untuk tampilan
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            frame_placeholder.image(frame_rgb, channels="RGB")
-            
-            # Simpan frame terakhir untuk diproses
-            captured_frame = frame
-        
-        cap.release()
-        
-        if captured_frame is not None:
-            st.info("✅ Frame tertangkap, memproses...")
-            # Konversi frame ke bytes untuk process_image
-            _, buffer = cv2.imencode('.jpg', captured_frame)
-            from io import BytesIO
-            frame_bytes = BytesIO(buffer.tobytes())
-            
-            processed_img, names = process_image(frame_bytes, mirror=False)
-            st.image(processed_img, caption="Hasil Deteksi", use_container_width=True)
-            
-            if names:
-                st.success(f"✅ Wajah terdaftar: **{', '.join(names)}**")
-            else:
-                st.error("❌ Wajah tidak terdaftar.")
-
-with tab2:
-    uploaded_file = st.file_uploader("Upload foto (JPG/PNG)", type=['jpg', 'png', 'jpeg'])
-    
-    if uploaded_file is not None:
-        processed_img, names = process_image(uploaded_file, mirror=False)
-        st.image(processed_img, caption="Hasil Analisis", use_container_width=True)
-        
-        if names:
-            st.success(f"✅ Teridentifikasi: **{', '.join(names)}**")
-        else:
-            st.error("❌ Tidak ada mahasiswa yang dikenali.")
+    with c2:
+        st.warning("🧠 ViT (Fine-Tuned)")
+        name, score = predict_vit(img_pil, thresh_vit)
+        st.success(f"**{name}**") if "Tidak Dikenal" not in name else st.error(name)
+        st.progress(min(score, 1.0), f"{score:.2f}")

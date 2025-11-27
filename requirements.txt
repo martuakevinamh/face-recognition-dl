@@ -4,3 +4,6 @@ onnxruntime
 opencv-python-headless
 numpy
 Pillow
+torch
+torchvision
+huggingface-hub
