@@ -120,16 +120,66 @@ tab1, tab2 = st.tabs(["📸 Ambil Foto (Live)", "📂 Upload File"])
 
 with tab1:
     st.write("Ambil foto selfie untuk presensi:")
-    camera_img = st.camera_input("Kamera")
     
-    if camera_img is not None:
-        processed_img, names = process_image(camera_img, mirror=mirror_camera)
-        st.image(processed_img, caption="Hasil Deteksi", use_container_width=True)
+    # Pilih input method
+    input_method = st.radio("Pilih Input:", ["Camera Streamlit", "Webcam Live (OpenCV)"], horizontal=True)
+    
+    if input_method == "Camera Streamlit":
+        camera_img = st.camera_input("Kamera")
         
-        if names:
-            st.success(f"✅ Presensi Berhasil: **{', '.join(names)}**")
-        else:
-            st.error("❌ Wajah tidak terdaftar.")
+        if camera_img is not None:
+            processed_img, names = process_image(camera_img, mirror=mirror_camera)
+            st.image(processed_img, caption="Hasil Deteksi", use_container_width=True)
+            
+            if names:
+                st.success(f"✅ Wajah terdaftar: **{', '.join(names)}**")
+            else:
+                st.error("❌ Wajah tidak terdaftar.")
+    
+    else:
+        # Webcam Live dengan OpenCV (bisa di-mirror)
+        st.write("**Live Webcam (Press 'c' to capture)**")
+        
+        cap = cv2.VideoCapture(0)
+        frame_placeholder = st.empty()
+        stop_button = st.button("Stop Webcam")
+        
+        captured_frame = None
+        
+        while cap.isOpened() and not stop_button:
+            ret, frame = cap.read()
+            
+            if not ret:
+                st.error("Tidak bisa akses webcam")
+                break
+            
+            # Mirror jika toggle aktif
+            if mirror_camera:
+                frame = cv2.flip(frame, 1)
+            
+            # Konversi BGR -> RGB untuk tampilan
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            frame_placeholder.image(frame_rgb, channels="RGB")
+            
+            # Simpan frame terakhir untuk diproses
+            captured_frame = frame
+        
+        cap.release()
+        
+        if captured_frame is not None:
+            st.info("✅ Frame tertangkap, memproses...")
+            # Konversi frame ke bytes untuk process_image
+            _, buffer = cv2.imencode('.jpg', captured_frame)
+            from io import BytesIO
+            frame_bytes = BytesIO(buffer.tobytes())
+            
+            processed_img, names = process_image(frame_bytes, mirror=False)
+            st.image(processed_img, caption="Hasil Deteksi", use_container_width=True)
+            
+            if names:
+                st.success(f"✅ Wajah terdaftar: **{', '.join(names)}**")
+            else:
+                st.error("❌ Wajah tidak terdaftar.")
 
 with tab2:
     uploaded_file = st.file_uploader("Upload foto (JPG/PNG)", type=['jpg', 'png', 'jpeg'])
