@@ -49,6 +49,7 @@ with st.spinner("Sedang menyiapkan sistem AI..."):
 # ==========================================
 st.sidebar.header("⚙️ Pengaturan")
 threshold = st.sidebar.slider("Akurasi Min (Threshold)", 0.0, 1.0, 0.50, 0.05)
+mirror_camera = st.sidebar.toggle("🔄 Mirror Kamera", value=False)
 st.sidebar.info(f"Jumlah Mahasiswa Terdaftar: **{len(face_db)}**")
 
 # ==========================================
@@ -119,11 +120,10 @@ tab1, tab2 = st.tabs(["📸 Ambil Foto (Live)", "📂 Upload File"])
 
 with tab1:
     st.write("Ambil foto selfie untuk presensi:")
-    mirror_cam = st.checkbox("🔄 Mirror Kamera", value=True)
     camera_img = st.camera_input("Kamera")
     
     if camera_img is not None:
-        processed_img, names = process_image(camera_img, mirror=mirror_cam)
+        processed_img, names = process_image(camera_img, mirror=mirror_camera)
         st.image(processed_img, caption="Hasil Deteksi", use_container_width=True)
         
         if names:
