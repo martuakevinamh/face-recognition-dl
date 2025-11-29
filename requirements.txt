@@ -1,8 +1,8 @@
 streamlit
-facenet-pytorch
 torch
 torchvision
-scikit-learn
-opencv-python-headless
 numpy
 Pillow
+facenet-pytorch
+opencv-python-headless
+huggingface-hub
