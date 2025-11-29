@@ -1,128 +1,195 @@
 import streamlit as st
-import torch
-import numpy as np
-from PIL import Image
-from facenet_pytorch import MTCNN, InceptionResnetV1
 import cv2
+import numpy as np
+import torch
+import torch.nn as nn
+from torchvision import models, transforms
+from PIL import Image
+from huggingface_hub import hf_hub_download
+from facenet_pytorch import MTCNN
+import os
 
 # ==========================================
 # 1. KONFIGURASI HALAMAN
 # ==========================================
-st.set_page_config(page_title="Presensi Wajah Pro", page_icon="👤", layout="centered")
+st.set_page_config(
+    page_title="Sistem Presensi Cerdas",
+    page_icon="🎓",
+    layout="centered"
+)
 
-st.title("👤 Sistem Presensi Wajah")
-st.caption("🚀 Model: InceptionResnetV1 (Feature) + SVM (Classifier) | Akurasi: 94%")
+# ⚠️ GANTI DENGAN USERNAME/NAMA_MODEL KAMU DI HUGGING FACE
+HF_REPO_ID = "martuakevin/tubes-deep-learning-face" 
+
+st.title("🎓 Presensi Mahasiswa Berbasis AI")
+st.caption("Didukung oleh Custom Vision Transformer (ViT-B/16) & MTCNN")
 st.markdown("---")
 
 # ==========================================
-# 2. LOAD ENGINE AI (Di-Cache Biar Ngebut)
+# 2. HELPER DOWNLOAD & LOAD MODEL
 # ==========================================
 @st.cache_resource
-def load_face_engine():
-    print("⏳ Memuat Engine AI...")
-    device = torch.device('cpu') # Aman buat laptop
-    
-    # 1. Detektor Wajah (MTCNN)
-    mtcnn = MTCNN(
-        image_size=160, margin=0, min_face_size=20,
-        thresholds=[0.6, 0.7, 0.7], factor=0.709, post_process=True,
-        device=device
-    )
-    
-    # 2. Ekstraktor Fitur (InceptionResnetV1)
-    resnet = InceptionResnetV1(pretrained='vggface2').eval()
-    return mtcnn, resnet
-
-@st.cache_resource
-def load_svm_model():
-    print("⏳ Memuat Otak SVM...")
+def get_file_from_hf(filename):
     try:
-        # Load file .pth hasil training kamu
-        state = torch.load('face_svm_augmented.pth', map_location='cpu')
-        return state['classifier']
+        return hf_hub_download(repo_id=HF_REPO_ID, filename=filename)
     except Exception as e:
-        st.error(f"❌ Gagal memuat model: {e}")
+        st.error(f"Gagal mengunduh {filename} dari Hugging Face: {e}")
         return None
 
-# Inisialisasi
-with st.spinner("Sedang menyiapkan sistem cerdas..."):
-    mtcnn, resnet = load_face_engine()
-    clf = load_svm_model()
+@st.cache_data
+def load_labels():
+    path = get_file_from_hf("labels_augmented.txt")
+    if path:
+        with open(path, 'r') as f:
+            return [line.strip() for line in f.readlines()]
+    return []
 
-# ==========================================
-# 3. LOGIKA PREDIKSI
-# ==========================================
-def predict_face(img_pil, threshold=0.5):
-    # 1. Deteksi & Crop Wajah
-    img_cropped, prob = mtcnn(img_pil, return_prob=True)
+@st.cache_resource
+def load_vit_model(num_classes):
+    print("⏳ Memuat Model ViT...")
+    device = torch.device("cpu") # Aman untuk Cloud/Laptop tanpa GPU
     
-    if img_cropped is not None and prob > 0.90:
-        # 2. Ubah Wajah jadi Angka (Embedding)
-        img_embedding = resnet(img_cropped.unsqueeze(0)) # Tambah dimensi batch
-        embedding_np = img_embedding.detach().numpy()
+    try:
+        # 1. Load Arsitektur ViT Kosong
+        model = models.vit_b_16(weights=None)
         
-        # 3. Prediksi Nama pakai SVM
-        prediction = clf.predict(embedding_np)
-        probability = clf.predict_proba(embedding_np)
+        # 2. Sesuaikan Kepala Model (Sesuai Training 100% kemarin)
+        model.heads.head = nn.Sequential(
+            nn.Dropout(0.2),
+            nn.Linear(model.heads.head.in_features, num_classes)
+        )
         
-        max_prob = np.max(probability)
-        name = prediction[0]
+        # 3. Load Bobot dari Hugging Face
+        model_path = get_file_from_hf("model_vit_augmented_martua.pth")
         
-        # 4. Cek Keyakinan (Threshold)
-        if max_prob > threshold:
-            return name, max_prob, img_cropped
-        else:
-            return "Wajah Tidak Dikenal", max_prob, img_cropped
+        if model_path:
+            state_dict = torch.load(model_path, map_location=device)
+            model.load_state_dict(state_dict)
+            model.eval() # Mode Evaluasi
+            return model
             
-    return "No Face", 0.0, None
+    except Exception as e:
+        st.error(f"Error memuat model ViT: {e}")
+    return None
+
+@st.cache_resource
+def load_face_detector():
+    # MTCNN untuk deteksi wajah
+    return MTCNN(keep_all=False, select_largest=True, device='cpu')
+
+# --- INISIALISASI SISTEM ---
+with st.spinner("Sedang menyiapkan kecerdasan buatan..."):
+    mtcnn = load_face_detector()
+    labels = load_labels()
+    
+    if labels:
+        model = load_vit_model(len(labels))
+    else:
+        model = None
+        st.error("Gagal memuat label nama.")
 
 # ==========================================
-# 4. TAMPILAN (UI)
+# 3. FUNGSI PREDIKSI CERDAS (MTCNN -> ViT)
 # ==========================================
-# Sidebar
-thresh = st.sidebar.slider("Sensitivitas (Threshold)", 0.0, 1.0, 0.50)
-st.sidebar.info(f"Database: **{len(clf.classes_)} Mahasiswa**")
+def predict_smart(img_pil, threshold=0.6):
+    if model is None: return "Error Model", 0.0, None
+    
+    # TAHAP 1: DETEKSI & CROP WAJAH
+    try:
+        # MTCNN mengembalikan tensor wajah yang sudah di-crop
+        face_tensor = mtcnn(img_pil) 
+    except:
+        face_tensor = None
 
-# Input
-mode = st.radio("Metode Input:", ["📸 Kamera", "📂 Upload File"], horizontal=True)
+    if face_tensor is None:
+        return "Wajah Tidak Ditemukan", 0.0, None
+    
+    # Konversi tensor balik ke PIL Image untuk visualisasi crop di UI
+    face_img_viz = transforms.ToPILImage()(face_tensor)
+
+    # TAHAP 2: PREDIKSI ViT
+    # Transformasi standar ViT (Resize 224, Normalize)
+    transform_vit = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])
+    ])
+    
+    # Siapkan input batch
+    input_tensor = transform_vit(face_img_viz).unsqueeze(0)
+
+    # Prediksi
+    with torch.no_grad():
+        outputs = model(input_tensor)
+        probs = torch.nn.functional.softmax(outputs, dim=1)
+        conf, idx = torch.max(probs, 1)
+    
+    confidence = conf.item()
+    pred_name = labels[idx.item()]
+    
+    # Logika Threshold
+    if confidence > threshold:
+        return pred_name, confidence, face_img_viz
+    else:
+        return f"Wajah Asing ({pred_name}?)", confidence, face_img_viz
+
+# ==========================================
+# 4. USER INTERFACE
+# ==========================================
+# Sidebar Kontrol
+st.sidebar.header("⚙️ Panel Kontrol")
+threshold = st.sidebar.slider("Tingkat Keyakinan (Threshold)", 0.0, 1.0, 0.60)
+st.sidebar.info(f"Database: **{len(labels)} Mahasiswa**")
+st.sidebar.markdown("---")
+st.sidebar.caption("Kelompok: Martua, Rayhan, Fadil")
+
+# Pilihan Input
+mode = st.radio("Metode Input:", ["📸 Ambil Foto (Live)", "📂 Upload File"], horizontal=True)
 
 image_input = None
-if mode == "📸 Kamera":
-    image_input = st.camera_input("Ambil Foto Presensi")
+if mode == "📸 Ambil Foto (Live)":
+    image_input = st.camera_input("Silakan ambil foto wajah")
 else:
-    image_input = st.file_uploader("Upload Foto", type=['jpg','png','jpeg'])
+    image_input = st.file_uploader("Upload foto wajah (JPG/PNG)", type=['jpg','png','jpeg'])
 
-# Eksekusi
+# Proses Gambar
 if image_input:
-    img_pil = Image.open(image_input).convert('RGB')
+    # Buka gambar
+    img_pil = Image.open(image_input).convert("RGB")
     
+    # Layout Kolom (Input vs Output)
     col1, col2 = st.columns(2)
     
     with col1:
         st.image(img_pil, caption="Foto Asli", use_container_width=True)
     
     with col2:
-        st.write("### Hasil Analisis")
+        st.markdown("### Hasil Analisis")
         
-        with st.spinner("Mengidentifikasi..."):
-            name, conf, face_tensor = predict_face(img_pil, thresh)
+        with st.spinner("Mendeteksi & Mengenali..."):
+            name, score, cropped_face = predict_smart(img_pil, threshold)
         
-        if name == "No Face":
-            st.error("❌ Wajah tidak ditemukan.")
-        elif name == "Wajah Tidak Dikenal":
-            st.warning(f"⚠️ **{name}**")
-            st.caption(f"Confidence: {conf*100:.1f}% (Kurang Yakin)")
-            # Tampilkan wajah yang dideteksi
-            if face_tensor is not None:
-                # Convert tensor ke gambar buat ditampilkan
-                face_img = face_tensor.permute(1, 2, 0).int().numpy()
-                st.image(face_img, caption="Input Wajah", width=100)
-        else:
-            st.success(f"✅ **Halo, {name}!**")
-            st.progress(conf, text=f"Akurasi: {conf*100:.1f}%")
-            st.balloons()
+        # Tampilkan Hasil
+        if "Tidak Ditemukan" in name:
+            st.warning("⚠️ **Wajah tidak terdeteksi.**")
+            st.caption("Coba posisikan wajah lebih jelas.")
             
-            # Tampilkan wajah yang dideteksi
-            if face_tensor is not None:
-                face_img = face_tensor.permute(1, 2, 0).int().numpy()
-                st.image(face_img, caption="Wajah Terdeteksi", width=120)
+        elif "Asing" in name:
+            st.error(f"❌ **{name}**")
+            st.progress(score, text=f"Confidence: {score*100:.1f}% (Rendah)")
+            if cropped_face:
+                st.image(cropped_face, caption="Input ke Model", width=120)
+                
+        elif "Error" in name:
+            st.error("Gagal memuat model AI.")
+            
+        else:
+            st.success(f"✅ **Teridentifikasi: {name}**")
+            st.progress(score, text=f"Confidence: {score*100:.1f}%")
+            
+            if score > 0.9:
+                st.balloons()
+            
+            if cropped_face:
+                st.image(cropped_face, caption="Wajah Terdeteksi", width=120)
+                st.info("💡 Sistem berhasil memotong wajah & mengabaikan background.")
