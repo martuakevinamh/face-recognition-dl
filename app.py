@@ -12,7 +12,7 @@ from facenet_pytorch import MTCNN
 # 1. KONFIGURASI
 # ==========================================
 st.set_page_config(page_title="Presensi ViT Smart Crop", page_icon="🧠", layout="centered")
-HF_REPO_ID = "martuakevin/tubes-presensi"  # GANTI DENGAN REPO KAMU
+HF_REPO_ID = "Martua/tubes-deep-learning-face"  
 
 st.title("🧠 Face Recognition (ViT)")
 st.caption("Menggunakan MTCNN untuk deteksi wajah & ViT untuk mengenali identitas.")
