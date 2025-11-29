@@ -60,7 +60,7 @@ def load_vit_model(num_classes):
         )
         
         # 3. Load Bobot dari Hugging Face
-        model_path = get_file_from_hf("model_vit_augmented_martua.pth")
+        model_path = get_file_from_hf("face_svm_augmented.pth")
         
         if model_path:
             state_dict = torch.load(model_path, map_location=device)
