@@ -5,189 +5,160 @@ import torch
 import torch.nn as nn
 from torchvision import models, transforms
 from PIL import Image
-import insightface
-from insightface.app import FaceAnalysis
 from huggingface_hub import hf_hub_download
-import os
+from facenet_pytorch import MTCNN 
 
 # ==========================================
-# 1. KONFIGURASI HALAMAN & REPO
+# 1. KONFIGURASI
 # ==========================================
-st.set_page_config(
-    page_title="Face Recognition Cerdas",
-    page_icon="🎓",
-    layout="wide"
-)
+st.set_page_config(page_title="Presensi ViT Smart Crop", page_icon="🧠", layout="centered")
+HF_REPO_ID = "martuakevin/tubes-presensi"  # GANTI DENGAN REPO KAMU
 
-HF_REPO_ID = "Martua/tubes-deep-learning-face" 
-
-st.title("🎓 Face Recognition Cerdas ")
-st.markdown("### Kelompok: Martua, Rayhan, Fadil")
+st.title("🧠 Face Recognition (ViT)")
+st.caption("Menggunakan MTCNN untuk deteksi wajah & ViT untuk mengenali identitas.")
 st.markdown("---")
 
 # ==========================================
-# 2. FUNGSI DOWNLOAD DARI HUGGING FACE
+# 2. LOAD RESOURCES
 # ==========================================
+@st.cache_resource
+def load_face_detector():
+    # MTCNN adalah detektor wajah standar industri yang ringan
+    return MTCNN(keep_all=False, select_largest=True, device='cpu')
+
 @st.cache_resource
 def get_file_from_hf(filename):
     try:
-        # Ini akan download file dan menyimpannya di cache lokal
-        path = hf_hub_download(repo_id=HF_REPO_ID, filename=filename)
-        return path
-    except Exception as e:
-        st.error(f"Gagal download {filename} dari Hugging Face: {e}")
+        return hf_hub_download(repo_id=HF_REPO_ID, filename=filename)
+    except:
         return None
-
-# ==========================================
-# 3. LOAD MODEL INSIGHTFACE (ZERO-SHOT)
-# ==========================================
-@st.cache_resource
-def load_insightface():
-    print("⏳ Memuat InsightFace...")
-    app = FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider'])
-    app.prepare(ctx_id=-1, det_size=(640, 640))
-    return app
-
-@st.cache_data
-def load_insightface_db():
-    # Download DB dulu kalau belum ada
-    db_path = get_file_from_hf("insightface_db.npy")
-    if db_path:
-        return np.load(db_path, allow_pickle=True).item()
-    return {}
-
-# ==========================================
-# 4. LOAD MODEL ViT (FINE-TUNED)
-# ==========================================
-@st.cache_resource
-def load_vit_model(num_classes):
-    print("⏳ Memuat ViT...")
-    device = torch.device("cpu")
-    
-    model = models.vit_b_16(weights=None)
-    model.heads.head = nn.Sequential(
-        nn.Dropout(0.2),
-        nn.Linear(model.heads.head.in_features, num_classes)
-    )
-    
-    # Download Model ViT dari HF
-    model_path = get_file_from_hf("model_vit_tuned_martua.pth")
-    
-    if model_path:
-        state_dict = torch.load(model_path, map_location=device)
-        model.load_state_dict(state_dict)
-        model.to(device)
-        model.eval()
-        return model
-    return None
 
 @st.cache_data
 def load_labels():
-    # Download Labels dari HF
-    label_path = get_file_from_hf("labels_pytorch.txt")
-    if label_path:
-        with open(label_path, 'r') as f:
+    path = get_file_from_hf("labels_augmented.txt")
+    if path:
+        with open(path, 'r') as f:
             return [line.strip() for line in f.readlines()]
     return []
 
-# --- EKSEKUSI LOAD RESOURCE ---
-with st.spinner("Sedang mengunduh model dari Hugging Face..."):
-    app_insight = load_insightface()
-    db_insight = load_insightface_db()
-    
-    labels_vit = load_labels()
-    # Pastikan labels terload sebelum load model
-    if labels_vit:
-        model_vit = load_vit_model(len(labels_vit))
-    else:
-        model_vit = None
+@st.cache_resource
+def load_vit_model(num_classes):
+    device = torch.device("cpu")
+    try:
+        model = models.vit_b_16(weights=None)
+        model.heads.head = nn.Sequential(
+            nn.Dropout(0.2),
+            nn.Linear(model.heads.head.in_features, num_classes)
+        )
+        path = get_file_from_hf("model_vit_augmented_martua.pth")
+        if path:
+            state_dict = torch.load(path, map_location=device)
+            model.load_state_dict(state_dict)
+            model.eval()
+            return model
+    except:
+        pass
+    return None
+
+# Init
+with st.spinner("Menyiapkan AI (Detektor + Pengenal)..."):
+    mtcnn = load_face_detector()
+    labels = load_labels()
+    model = load_vit_model(len(labels)) if labels else None
 
 # ==========================================
-# 5. FUNGSI PREDIKSI 
+# 3. FUNGSI PREDIKSI CERDAS
 # ==========================================
-def predict_insightface(img_bgr, threshold=0.5):
-    faces = app_insight.get(img_bgr)
-    if len(faces) == 0: return "Wajah Tidak Terdeteksi", 0.0
+def predict_smart(img_pil, threshold=0.6):
+    if model is None: return "Error Model", 0.0, img_pil
     
-    face = sorted(faces, key=lambda x: (x.bbox[2]-x.bbox[0]) * (x.bbox[3]-x.bbox[1]), reverse=True)[0]
-    emb = face.normed_embedding
-    
-    max_score = 0
-    best_name = "Unknown"
-    for name, db_emb in db_insight.items():
-        score = np.dot(emb, db_emb)
-        if score > max_score:
-            max_score = score
-            best_name = name
-            
-    return (best_name, float(max_score)) if max_score > threshold else ("Tidak Dikenal", float(max_score))
+    # --- TAHAP 1: DETEKSI & CROP WAJAH ---
+    # MTCNN akan otomatis mencari wajah dan memotongnya
+    # Outputnya langsung tensor atau PIL Image yang sudah di-crop
+    try:
+        face_tensor = mtcnn(img_pil) # Deteksi wajah
+    except:
+        face_tensor = None
 
-def predict_vit(img_pil, threshold=0.5):
-    if model_vit is None: return "Model Error", 0.0
-    transform = transforms.Compose([
+    if face_tensor is None:
+        return "Wajah Tidak Ditemukan", 0.0, img_pil
+    
+    # Konversi tensor balik ke PIL Image untuk ditampilkan ke user (Visualisasi Crop)
+    face_img_viz = transforms.ToPILImage()(face_tensor)
+
+    # --- TAHAP 2: PREDIKSI ViT ---
+    # Transformasi khusus ViT
+    transform_vit = transforms.Compose([
+        transforms.Resize((224, 224)), # Pastikan ukuran pas buat ViT
+        # Tidak perlu ToTensor lagi karena output MTCNN sudah tensor (jika dikonfig begitu)
+        # Tapi biar aman kita normalize manual dari tensor MTCNN
+        transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])
+    ])
+    
+    # MTCNN outputnya range 0-1 atau -1..1 tergantung setting, 
+    # kita pastikan formatnya sesuai input ViT
+    # Cara aman: face_img_viz -> Transform ViT Standard
+    
+    transform_standard = transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.ToTensor(),
         transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])
     ])
-    img_tensor = transform(img_pil).unsqueeze(0)
+    
+    input_tensor = transform_standard(face_img_viz).unsqueeze(0)
+
     with torch.no_grad():
-        outputs = model_vit(img_tensor)
+        outputs = model(input_tensor)
         probs = torch.nn.functional.softmax(outputs, dim=1)
         conf, idx = torch.max(probs, 1)
-    return (labels_vit[idx.item()], conf.item()) if conf.item() > threshold else ("Tidak Dikenal", conf.item())
+    
+    confidence = conf.item()
+    pred_name = labels[idx.item()]
+    
+    if confidence > threshold:
+        return pred_name, confidence, face_img_viz
+    else:
+        return f"Wajah Asing ({pred_name})", confidence, face_img_viz
 
 # ==========================================
-# 6. UI UTAMA
+# 4. UI APLIKASI
 # ==========================================
-col1, col2 = st.columns(2)
-with col1:
-    thresh_insight = st.slider("Threshold InsightFace", 0.0, 1.0, 0.5)
-with col2:
-    thresh_vit = st.slider("Threshold ViT", 0.0, 1.0, 0.5)
+col_conf, col_stat = st.columns(2)
+with col_conf:
+    thresh = st.slider("Threshold Keyakinan", 0.0, 1.0, 0.60)
+with col_stat:
+    st.info(f"Database: **{len(labels)} Mahasiswa**")
 
-col3, col4 = st.columns(2)
-with col3:
-    mirror_image = st.toggle("🔄 Mirror Gambar", value=False)
-with col4:
-    st.empty()  # Placeholder untuk balance layout
+mode = st.radio("Input:", ["📸 Kamera", "📂 Upload"], horizontal=True)
+img_file = st.camera_input("Foto") if mode == "📸 Kamera" else st.file_uploader("Upload", type=['jpg','png','jpeg'])
 
-input_mode = st.radio("Mode:", ["📸 Kamera", "📂 Upload File"], horizontal=True)
-image_input = st.camera_input("Foto") if input_mode == "📸 Kamera" else st.file_uploader("Upload", type=['jpg','png','jpeg'])
-
-if image_input:
-    file_bytes = np.asarray(bytearray(image_input.read()), dtype=np.uint8)
-    img_bgr = cv2.imdecode(file_bytes, 1)
-    img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+if img_file:
+    img_pil = Image.open(img_file).convert("RGB")
     
-    # Apply mirror jika toggle aktif
-    if mirror_image:
-        img_bgr = cv2.flip(img_bgr, 1)
-        img_rgb = cv2.flip(img_rgb, 1)
-    
-    image_input.seek(0)
-    img_pil = Image.open(image_input).convert("RGB")
-    
-    # Apply mirror pada PIL image jika toggle aktif
-    if mirror_image:
-        img_pil = img_pil.transpose(Image.FLIP_LEFT_RIGHT)
-    
-    st.image(img_rgb, width=400)
-    
+    # Layout 2 Kolom: Asli vs Hasil Crop
     c1, c2 = st.columns(2)
+    
     with c1:
-        st.info("🤖 InsightFace")
-        name, score = predict_insightface(img_bgr, thresh_insight)
-        if name != "Tidak Dikenal":
-            st.success(f"**{name}**")
-        else:
-            st.error(name)
-        st.progress(min(score, 1.0), f"{score:.2f}")
+        st.image(img_pil, caption="Foto Asli (Full)", use_container_width=True)
         
     with c2:
-        st.warning("🧠 ViT (Fine-Tuned)")
-        name, score = predict_vit(img_pil, thresh_vit)
-        if name != "Tidak Dikenal":
-            st.success(f"**{name}**")
+        with st.spinner("Mendeteksi & Mengenali Wajah..."):
+            name, score, cropped_face = predict_smart(img_pil, thresh)
+        
+        # Tampilkan Wajah yang Dideteksi (Crop)
+        st.image(cropped_face, caption="Wajah Terdeteksi (Input ke ViT)", width=200)
+        
+        # Hasil
+        if "Tidak Ditemukan" in name:
+            st.warning("⚠️ Wajah tidak terdeteksi oleh MTCNN.")
+        elif "Asing" in name:
+            st.error(f"❌ **{name}**")
+            st.caption("Sistem ragu-ragu (Score rendah).")
+        elif "Error" in name:
+            st.error("Gagal memuat model.")
         else:
-            st.error(name)
-        st.progress(min(score, 1.0), f"{score:.2f}")
+            st.success(f"✅ **{name}**")
+            st.progress(score, text=f"Confidence: {score*100:.1f}%")
+            
+            # Penjelasan Logis buat Demo
+            st.info("💡 **Info Teknis:** Sistem berhasil memotong bagian wajah dan mengabaikan background/baju, sehingga prediksi lebih akurat.")
