@@ -1,10 +1,8 @@
 streamlit
-insightface
-onnxruntime
+facenet-pytorch
+torch
+torchvision
+scikit-learn
 opencv-python-headless
 numpy
 Pillow
-torch
-torchvision
-huggingface-hub
-facenet-pytorch
