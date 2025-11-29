@@ -19,7 +19,7 @@ st.set_page_config(
 )
 
 # ⚠️ GANTI DENGAN USERNAME/NAMA_MODEL KAMU DI HUGGING FACE
-HF_REPO_ID = "martua/tubes-deep-learning-face" 
+HF_REPO_ID = "Martua/tubes-deep-learning-face" 
 
 st.title("🎓 Presensi Mahasiswa Berbasis AI")
 st.caption("Didukung oleh Custom Vision Transformer (ViT-B/16) & MTCNN")
