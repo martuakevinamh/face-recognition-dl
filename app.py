@@ -57,8 +57,7 @@ def load_svm_model():
     
     if model_path:
         try:
-            # Load file .pth yang berisi dictionary {'classifier': ..., 'classes': ...}
-            state = torch.load(model_path, map_location='cpu')
+            state = torch.load(model_path, map_location='cpu', weights_only=False)
             return state['classifier'], state['classes']
         except Exception as e:
             st.error(f"Error membaca model SVM: {e}")
