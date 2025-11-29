@@ -3,6 +3,7 @@ torch
 torchvision
 numpy
 Pillow
-facenet-pytorch
-opencv-python-headless
 huggingface-hub
+facenet-pytorch
+scikit-learn
+opencv-python-headless
