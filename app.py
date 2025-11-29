@@ -18,7 +18,7 @@ st.set_page_config(
 )
 
 # ⚠️ JANGAN LUPA GANTI INI
-HF_REPO_ID = "martuakevin/tubes-face-recognition-dl" 
+HF_REPO_ID = "Martua/tubes-deep-learning-face" 
 
 st.title("🎓 Sistem Presensi Cerdas")
 st.caption("Powered by Custom Vision Transformer (ViT-B/16)")
